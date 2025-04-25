@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Realtime Talking Agent</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        
+        .message {
+            padding: 10px;
+            border-radius: 5px;
+            max-width: 80%;
+        }
+        
+        .user-message {
+            align-self: flex-end;
+            background-color: #dcf8c6;
+        }
+        
+        .assistant-message {
+            align-self: flex-start;
+            background-color: #f1f0f0;
+        }
+        
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        button {
+            padding: 10px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        
+        button:hover {
+            background-color: #45a049;
+        }
+        
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            text-align: center;
+            font-style: italic;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>Realtime Talking Agent</h1>
+    
+    <div class="container">
+        <div id="chatContainer" class="chat-container"></div>
+        
+        <div class="controls">
+            <div class="status" id="status">Ready to start</div>
+            <button id="recordButton">Start Recording</button>
+        </div>
+    </div>
+
+    <script>
+        // DOM elements
+        const recordButton = document.getElementById('recordButton');
+        const statusElement = document.getElementById('status');
+        const chatContainer = document.getElementById('chatContainer');
+        
+        // Variables for recording
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+        
+        // Initialize microphone access
+        async function setupMicrophone() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                mediaRecorder = new MediaRecorder(stream);
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+                
+                mediaRecorder.onstop = async () => {
+                    // Create blob from chunks (most browsers record in WebM format)
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    
+                    // Create form data
+                    const formData = new FormData();
+                    formData.append('audio', audioBlob);
+                    
+                    // Send to server
+                    const response = await fetch('/api/save-audio', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    // Handle response
+                    const data = await response.json();
+                    console.log('Audio saved as MP3:', data.filename);
+                };
+                
+                recordButton.disabled = false;
+                statusElement.textContent = 'Ready to record';
+            } catch (error) {
+                console.error('Error accessing microphone:', error);
+                statusElement.textContent = 'Error: ' + error.message;
+            }
+        }
+        
+        // Start or stop recording based on current state
+        function toggleRecording() {
+            if (isRecording) {
+                // Stop recording
+                mediaRecorder.stop();
+                recordButton.textContent = 'Start Recording';
+                statusElement.textContent = 'Processing...';
+            } else {
+                // Start recording
+                audioChunks = [];
+                mediaRecorder.start();
+                recordButton.textContent = 'Stop Recording';
+                statusElement.textContent = 'Recording...';
+            }
+            
+            isRecording = !isRecording;
+        }
+        
+        // Process recorded audio
+        async function processAudio() {
+            try {
+                statusElement.textContent = 'Converting speech to text...';
+                
+                // Create audio blob from chunks
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                
+                // Create form data for API request
+                const formData = new FormData();
+                formData.append('audio', audioBlob);
+                formData.append('save_as_mp3', 'true');
+                formData.append('filename', `recording_${Math.floor(Date.now()/1000)}.mp3`);
+                
+                // Send audio to speech-to-text API
+                const sttResponse = await fetch('/api/speech-to-text', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!sttResponse.ok) {
+                    throw new Error('Speech-to-text request failed');
+                }
+                
+                const sttData = await sttResponse.json();
+                const transcribedText = sttData.text;
+                
+                // Display user message
+                addMessage(transcribedText, 'user');
+                
+                // Get AI response
+                statusElement.textContent = 'Getting AI response...';
+                const chatResponse = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ message: transcribedText })
+                });
+                
+                if (!chatResponse.ok) {
+                    throw new Error('Chat request failed');
+                }
+                
+                const chatData = await chatResponse.json();
+                const aiResponseText = chatData.response;
+                
+                // Display AI message
+                addMessage(aiResponseText, 'assistant');
+                
+                // Convert AI response to speech
+                statusElement.textContent = 'Converting text to speech...';
+                const ttsResponse = await fetch('/api/text-to-speech', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ text: aiResponseText })
+                });
+                
+                if (!ttsResponse.ok) {
+                    throw new Error('Text-to-speech request failed');
+                }
+                
+                const ttsData = await ttsResponse.json();
+                
+                // Play audio response
+                playAudioResponse(ttsData.audio);
+                
+            } catch (error) {
+                console.error('Error processing audio:', error);
+                statusElement.textContent = 'Error: ' + error.message;
+            }
+        }
+        
+        // Add message to chat container
+        function addMessage(text, role) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message');
+            messageElement.classList.add(role === 'user' ? 'user-message' : 'assistant-message');
+            messageElement.textContent = text;
+            
+            chatContainer.appendChild(messageElement);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+        
+        // Play audio response from base64 data
+        function playAudioResponse(base64Audio) {
+            const audio = new Audio(`data:audio/mp3;base64,${base64Audio}`);
+            
+            audio.onplay = () => {
+                statusElement.textContent = 'Playing response...';
+            };
+            
+            audio.onended = () => {
+                statusElement.textContent = 'Ready to record';
+            };
+            
+            audio.play().catch(error => {
+                console.error('Error playing audio:', error);
+                statusElement.textContent = 'Error playing audio';
+            });
+        }
+        
+        // Set up event listeners
+        recordButton.addEventListener('click', toggleRecording);
+        
+        // Initialize the app
+        setupMicrophone();
+    </script>
+</body>
+</html> 

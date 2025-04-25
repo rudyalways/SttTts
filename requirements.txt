@@ -1,0 +1,5 @@
+Flask==2.3.3
+openai==1.6.0
+python-dotenv==1.0.0
+Flask-Cors==4.0.0
+pygame==2.5.2 
