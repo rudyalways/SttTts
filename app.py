@@ -88,6 +88,40 @@ def text_to_speech_fish(text):
             f.write(chunk)
     return output_path
 
+from elevenlabs import VoiceSettings
+from elevenlabs.client import ElevenLabs
+def text_to_speech_11labs(text: str):
+
+    timestamp = int(time.time())
+    output_filename = f"response_{timestamp}.mp3"
+    output_path = os.path.join(RECORDINGS_DIR, output_filename)
+
+    elevenlabs_client = ElevenLabs(
+        api_key=os.environ.get('ELEVENLABS_API_KEY'),
+    )
+
+    audio = elevenlabs_client.text_to_speech.convert(
+        voice_id=os.environ.get('ELEVENLABS_VOICE_ID'),
+        model_id='eleven_turbo_v2',
+        # optimize_streaming_latency="0",
+        output_format='mp3_22050_32',
+        text=text,
+        voice_settings=VoiceSettings(
+            stability=0.5,
+            similarity_boost=0.5,
+            style=0.2,
+        ),
+    )
+    # save audio to mp3
+    with open(output_path, "wb") as f:
+        # Handle the generator returned by ElevenLabs
+        if hasattr(audio, '__iter__'):
+            for chunk in audio:
+                f.write(chunk)
+        else:
+            f.write(audio)
+
+    return output_path
 
 def process_audio(audio_path):
     """Main function to process audio input and generate response"""
@@ -101,7 +135,7 @@ def process_audio(audio_path):
     response_text = generate_response(transcription)
     
     # Step 3: Convert response to speech
-    response_audio = text_to_speech_fish(response_text)
+    response_audio = text_to_speech_11labs(response_text)
     
     # Return all results
     return transcription, response_text, response_audio
