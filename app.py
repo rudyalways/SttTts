@@ -90,7 +90,7 @@ def text_to_speech_fish(text):
 
 from elevenlabs import VoiceSettings
 from elevenlabs.client import ElevenLabs
-def text_to_speech_11labs(text: str):
+def text_to_speech_11labs(text: str, speed: float = 1.0):
     print(f'start text_to_speech_11labs')
 
     timestamp = int(time.time())
@@ -115,6 +115,7 @@ def text_to_speech_11labs(text: str):
             stability=0.5,
             similarity_boost=0.5,
             style=0.2,
+            speed=speed,
         ),
     )
     # save audio to mp3
@@ -128,7 +129,7 @@ def text_to_speech_11labs(text: str):
 
     return output_path
 
-def process_audio(audio_path):
+def process_audio(audio_path, voice_speed=1.0):
     """Main function to process audio input and generate response"""
     if audio_path is None:
         return "Please record audio first.", None, None
@@ -141,7 +142,7 @@ def process_audio(audio_path):
     
     # Step 3: Convert response to speech
     print(f'before text_to_speech_11labs')
-    response_audio = text_to_speech_11labs(response_text)
+    response_audio = text_to_speech_11labs(response_text, speed=voice_speed)
     
     # Return all results
     return transcription, response_text, response_audio
@@ -157,6 +158,14 @@ with gr.Blocks(title="Realtime Talking Agent") as demo:
                 label="Record your message",
                 sources=["microphone"], 
                 type="filepath"
+            )
+            voice_speed = gr.Slider(
+                minimum=0.7,
+                maximum=1.2,
+                value=1.0,
+                step=0.05,
+                label="Voice Speed",
+                info="Control the speech rate (0.7-1.2)"
             )
             submit_btn = gr.Button("Process Audio")
         
@@ -181,14 +190,14 @@ with gr.Blocks(title="Realtime Talking Agent") as demo:
     # Set up events
     submit_btn.click(
         fn=process_audio,
-        inputs=audio_input,
+        inputs=[audio_input, voice_speed],
         outputs=[transcription_output, response_output, audio_output]
     )
     
     # Also process when recording is completed
     audio_input.stop_recording(
         fn=process_audio,
-        inputs=audio_input,
+        inputs=[audio_input, voice_speed],
         outputs=[transcription_output, response_output, audio_output]
     )
     
