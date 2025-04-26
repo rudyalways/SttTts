@@ -6,7 +6,7 @@ import whisper
 from dotenv import load_dotenv
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 oai_key = os.getenv("OPENAI_API_KEY")
 
 # Create recordings directory if it doesn't exist
@@ -43,7 +43,7 @@ def generate_response(message):
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "system", "content": "You are a helpful assistant. Please respond in Simplified Chinese (简体中文)."},
             {"role": "user", "content": message}
         ]
     )
@@ -91,17 +91,22 @@ def text_to_speech_fish(text):
 from elevenlabs import VoiceSettings
 from elevenlabs.client import ElevenLabs
 def text_to_speech_11labs(text: str):
+    print(f'start text_to_speech_11labs')
 
     timestamp = int(time.time())
     output_filename = f"response_{timestamp}.mp3"
     output_path = os.path.join(RECORDINGS_DIR, output_filename)
 
     elevenlabs_client = ElevenLabs(
-        api_key=os.environ.get('ELEVENLABS_API_KEY'),
+        api_key=os.getenv('ELEVENLABS_API_KEY'),
     )
 
+    # Use the globally defined voice_id variable or get it again using os.getenv
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID")
+    print(f"Using voice ID: {voice_id}")
+
     audio = elevenlabs_client.text_to_speech.convert(
-        voice_id=os.environ.get('ELEVENLABS_VOICE_ID'),
+        voice_id=voice_id,
         model_id='eleven_turbo_v2',
         # optimize_streaming_latency="0",
         output_format='mp3_22050_32',
@@ -135,6 +140,7 @@ def process_audio(audio_path):
     response_text = generate_response(transcription)
     
     # Step 3: Convert response to speech
+    print(f'before text_to_speech_11labs')
     response_audio = text_to_speech_11labs(response_text)
     
     # Return all results
