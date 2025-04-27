@@ -107,31 +107,42 @@ def text_to_speech_11labs(text: str, speed: float = 1.0):
         api_key=os.getenv('ELEVENLABS_API_KEY'),
     )
 
-    # Use the globally defined voice_id variable or get it again using os.getenv
     voice_id = os.getenv("ELEVENLABS_VOICE_ID")
     print(f"Using voice ID: {voice_id}")
 
-    audio = elevenlabs_client.text_to_speech.convert(
-        voice_id=voice_id,
-        model_id='eleven_turbo_v2',
-        # optimize_streaming_latency="0",
-        output_format='mp3_22050_32',
-        text=text,
-        voice_settings=VoiceSettings(
-            stability=0.5,
-            similarity_boost=0.5,
-            style=0.2,
-            speed=speed,
-        ),
-    )
-    # save audio to mp3
-    with open(output_path, "wb") as f:
-        # Handle the generator returned by ElevenLabs
-        if hasattr(audio, '__iter__'):
-            for chunk in audio:
-                f.write(chunk)
-        else:
-            f.write(audio)
+    try:
+        audio = elevenlabs_client.text_to_speech.convert(
+            voice_id=voice_id,
+            model_id='eleven_turbo_v2',
+            output_format='mp3_22050_32',
+            text=text,
+            voice_settings=VoiceSettings(
+                stability=0.5,
+                similarity_boost=0.5,
+                style=0.2,
+                speed=speed,
+            ),
+        )
+        with open(output_path, "wb") as f:
+            if hasattr(audio, '__iter__'):
+                wrote = False
+                for chunk in audio:
+                    f.write(chunk)
+                    wrote = True
+                if not wrote:
+                    raise ValueError("No audio data received from ElevenLabs.")
+            else:
+                if not audio:
+                    raise ValueError("No audio data received from ElevenLabs.")
+                f.write(audio)
+    except Exception as e:
+        print(f"TTS generation failed: {e}")
+        return None  # Or return a path to a default error audio file
+
+    # Check file size
+    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        print("Generated audio file is empty.")
+        return None
 
     return output_path
 
@@ -150,6 +161,8 @@ def process_audio(audio_path, voice_speed=1.0):
     # Step 3: Convert response to speech
     print(f'before text_to_speech_11labs')
     response_audio = text_to_speech_11labs(response_text, speed=voice_speed)
+    if not response_audio:
+        return transcription, response_text, None  # Or a default error message/audio
 
     # Return all results
     return transcription, response_text, response_audio
