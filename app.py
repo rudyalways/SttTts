@@ -1,5 +1,6 @@
 import os
 import time
+from typing import Iterator
 
 import gradio as gr
 import openai
@@ -153,6 +154,40 @@ def text_to_speech_11labs(text: str, speed: float = 1.0):
     return output_path
 
 
+def text_to_speech_11labs_as_stream(text: str, speed: float = 1.0) -> Iterator[bytes]:
+    print(f'start text_to_speech_11labs_as_stream')
+
+    elevenlabs_client = ElevenLabs(
+        api_key=os.getenv('ELEVENLABS_API_KEY'),
+    )
+
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID")
+    print(f"Using voice ID: {voice_id}")
+
+    try:
+        # audio = elevenlabs_client.text_to_speech.convert(
+        #     voice_id=voice_id,
+        #     model_id='eleven_turbo_v2',
+        #     output_format='mp3_22050_32',
+        #     text=text,
+        #     voice_settings=VoiceSettings(
+        #         stability=0.5,
+        #         similarity_boost=0.5,
+        #         style=0.2,
+        #         speed=speed,
+        #     ),
+        # )
+        return elevenlabs_client.text_to_speech.convert_as_stream(
+            text=text,
+            voice_id=voice_id,
+            model_id="eleven_multilingual_v2",
+            output_format="mp3_44100_128",
+        )
+    except Exception as e:
+        print(f"TTS generation failed: {e}")
+        return None  # Or return a path to a default error audio file
+
+
 def process_audio(audio_path, voice_speed=1.0):
     """Main function to process audio input and generate response"""
     if audio_path is None:
@@ -166,7 +201,7 @@ def process_audio(audio_path, voice_speed=1.0):
 
     # Step 3: Convert response to speech
     print(f'before text_to_speech_11labs')
-    response_audio = text_to_speech_11labs(response_text, speed=voice_speed)
+    response_audio = text_to_speech_11labs_as_stream(response_text, speed=voice_speed)
     if not response_audio:
         return transcription, response_text, None  # Or a default error message/audio
 
@@ -207,8 +242,7 @@ with gr.Blocks(title="Realtime Talking Agent") as demo:
         recording_gallery = gr.Files(label="Saved Recordings", file_count="multiple")
 
         def update_recordings():
-            files = [os.path.join(RECORDINGS_DIR, f) for f in os.listdir(RECORDINGS_DIR)
-                     if f.endswith('.mp3')]
+            files = [os.path.join(RECORDINGS_DIR, f) for f in os.listdir(RECORDINGS_DIR) if f.endswith('.mp3')]
             return files
 
         refresh_btn = gr.Button("Refresh Recording List")
