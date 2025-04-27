@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv(override=True)
 oai_key = os.getenv("OPENAI_API_KEY")
+openai.api_key = oai_key
 
 # Create recordings directory if it doesn't exist
 RECORDINGS_DIR = os.path.join(os.getcwd(), 'recordings')
@@ -18,7 +19,7 @@ if not os.path.exists(RECORDINGS_DIR):
 whisper_model = whisper.load_model("base")
 
 # Initialize OpenAI client
-client = openai.OpenAI(api_key=oai_key)
+# client = openai.OpenAI(api_key=oai_key)
 
 def transcribe_audio(audio_path):
     """Transcribe audio using Whisper model"""
@@ -40,7 +41,7 @@ def transcribe_audio(audio_path):
 
 def generate_response(message):
     """Generate response using OpenAI GPT"""
-    response = client.chat.completions.create(
+    response = openai.chat.completions.create(
         model="gpt-4o",
         messages=[
             {"role": "system", "content": "You are a helpful assistant. Please respond in Simplified Chinese (简体中文)."},
@@ -56,7 +57,7 @@ def text_to_speech(text):
     output_path = os.path.join(RECORDINGS_DIR, output_filename)
     
     # Generate speech from text
-    response = client.audio.speech.create(
+    response = openai.Audio.speech.create(
         model="tts-1",
         voice="alloy",
         input=text
