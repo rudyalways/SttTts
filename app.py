@@ -1,19 +1,57 @@
 import os
+import threading
 import time
+import urllib.parse
 from typing import Iterator
 
 import gradio as gr
 import openai
+import uvicorn
 import whisper
 from dotenv import load_dotenv
 from elevenlabs import VoiceSettings
 from elevenlabs.client import ElevenLabs
+from fastapi import FastAPI, Query
+from fastapi.responses import StreamingResponse
 from fish_audio_sdk import ReferenceAudio, Session, TTSRequest
+
+app = FastAPI()
+
+
+@app.get("/stream_audio")
+def stream_audio(text: str = Query(...), speed: float = Query(1.0)):
+    audio_stream = text_to_speech_11labs_as_stream(text, speed)
+    if not audio_stream:
+        return "Error on generating audio stream"
+    return StreamingResponse(audio_stream, media_type="audio/mpeg")
+
+
+def get_audio_player_html(text, speed):
+    text_param = urllib.parse.quote(text)
+    return f"""
+        <audio id="ai-audio" controls autoplay>
+            <source src="http://localhost:8000/stream_audio?text={text_param}&speed={speed}" type="audio/mpeg">
+            Your browser does not support the audio element.
+        </audio>
+        <script>
+            document.addEventListener('DOMContentLoaded', () => {{
+                window.setTimeout(function() {{
+                    var audioElement = document.getElementById('ai-audio');
+                    if (audioElement) {{
+                        console.log("tttt");
+                        audioElement.play().catch(function(error) {{
+                            console.log("Audio playback failed:", error);
+                        }});
+                    }}
+                }}, 1000);
+            }});
+        </script>
+    """
+
 
 # Load environment variables
 load_dotenv(override=True)
-oai_key = os.getenv("OPENAI_API_KEY")
-openai.api_key = oai_key
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Create recordings directory if it doesn't exist
 RECORDINGS_DIR = os.path.join(os.getcwd(), 'recordings')
@@ -155,8 +193,6 @@ def text_to_speech_11labs(text: str, speed: float = 1.0):
 
 
 def text_to_speech_11labs_as_stream(text: str, speed: float = 1.0) -> Iterator[bytes]:
-    print(f'start text_to_speech_11labs_as_stream')
-
     elevenlabs_client = ElevenLabs(
         api_key=os.getenv('ELEVENLABS_API_KEY'),
     )
@@ -165,24 +201,16 @@ def text_to_speech_11labs_as_stream(text: str, speed: float = 1.0) -> Iterator[b
     print(f"Using voice ID: {voice_id}")
 
     try:
-        # audio = elevenlabs_client.text_to_speech.convert(
-        #     voice_id=voice_id,
-        #     model_id='eleven_turbo_v2',
-        #     output_format='mp3_22050_32',
-        #     text=text,
-        #     voice_settings=VoiceSettings(
-        #         stability=0.5,
-        #         similarity_boost=0.5,
-        #         style=0.2,
-        #         speed=speed,
-        #     ),
-        # )
-        return elevenlabs_client.text_to_speech.convert_as_stream(
+        start_time = time.time()  # Start timing
+        result = elevenlabs_client.text_to_speech.convert_as_stream(
             text=text,
             voice_id=voice_id,
             model_id="eleven_multilingual_v2",
             output_format="mp3_44100_128",
         )
+        end_time = time.time()  # End timing
+        print(f"ElevenLabs convert_as_stream execution time: {(end_time - start_time) * 1000:.0f} ms")
+        return result
     except Exception as e:
         print(f"TTS generation failed: {e}")
         return None  # Or return a path to a default error audio file
@@ -199,14 +227,14 @@ def process_audio(audio_path, voice_speed=1.0):
     # Step 2: Generate response
     response_text = generate_response(transcription)
 
-    # Step 3: Convert response to speech
-    print(f'before text_to_speech_11labs')
-    response_audio = text_to_speech_11labs_as_stream(response_text, speed=voice_speed)
-    if not response_audio:
-        return transcription, response_text, None  # Or a default error message/audio
+    # # Step 3: Convert response to speech
+    # print(f'before text_to_speech_11labs')
+    # response_audio = text_to_speech_11labs_as_stream(response_text, speed=voice_speed)
+    # if not response_audio:
+    #     return transcription, response_text, None  # Or a default error message/audio
 
     # Return all results
-    return transcription, response_text, response_audio
+    return transcription, response_text, get_audio_player_html(response_text, voice_speed)
 
 
 # Create Gradio interface
@@ -234,7 +262,8 @@ with gr.Blocks(title="Realtime Talking Agent") as demo:
         with gr.Column():
             transcription_output = gr.Textbox(label="Your message (transcribed)")
             response_output = gr.Textbox(label="AI Response")
-            audio_output = gr.Audio(label="AI Voice Response", autoplay=True)
+            # audio_output = gr.Audio(label="AI Voice Response", autoplay=True)
+            audio_html = gr.HTML()
 
     # History section
     with gr.Accordion("Recording History", open=False):
@@ -252,14 +281,14 @@ with gr.Blocks(title="Realtime Talking Agent") as demo:
     submit_btn.click(
         fn=process_audio,
         inputs=[audio_input, voice_speed],
-        outputs=[transcription_output, response_output, audio_output]
+        outputs=[transcription_output, response_output, audio_html]
     )
 
     # Also process when recording is completed
     audio_input.stop_recording(
         fn=process_audio,
         inputs=[audio_input, voice_speed],
-        outputs=[transcription_output, response_output, audio_output]
+        outputs=[transcription_output, response_output, audio_html]
     )
 
     # Initialize recordings list on load
@@ -267,4 +296,12 @@ with gr.Blocks(title="Realtime Talking Agent") as demo:
 
 # Launch the app
 if __name__ == "__main__":
-    demo.launch()
+    # demo.launch()
+
+    def run_gradio():
+        demo.launch(server_name="0.0.0.0", server_port=7860, share=False)
+
+    gradio_thread = threading.Thread(target=run_gradio)
+    gradio_thread.start()
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
