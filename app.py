@@ -20,7 +20,7 @@ if not os.path.exists(RECORDINGS_DIR):
     os.makedirs(RECORDINGS_DIR)
 
 # Load Whisper model
-whisper_model = whisper.load_model("base")
+whisper_model = whisper.load_model("medium") 
 
 # Initialize OpenAI client
 # client = openai.OpenAI(api_key=oai_key)
