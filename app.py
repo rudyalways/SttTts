@@ -1,9 +1,13 @@
 import os
 import time
+
 import gradio as gr
 import openai
 import whisper
 from dotenv import load_dotenv
+from elevenlabs import VoiceSettings
+from elevenlabs.client import ElevenLabs
+from fish_audio_sdk import ReferenceAudio, Session, TTSRequest
 
 # Load environment variables
 load_dotenv(override=True)
@@ -21,23 +25,25 @@ whisper_model = whisper.load_model("base")
 # Initialize OpenAI client
 # client = openai.OpenAI(api_key=oai_key)
 
+
 def transcribe_audio(audio_path):
     """Transcribe audio using Whisper model"""
     # Save a copy of the audio file with timestamp
     timestamp = int(time.time())
     filename = f"recording_{timestamp}.mp3"
     saved_path = os.path.join(RECORDINGS_DIR, filename)
-    
+
     # Use whisper to transcribe
     result = whisper_model.transcribe(audio_path)
     transcription = result["text"]
     print(result)
-    
+
     # Save a copy of the recording
     import shutil
     shutil.copy(audio_path, saved_path)
-    
+
     return transcription, saved_path
+
 
 def generate_response(message):
     """Generate response using OpenAI GPT"""
@@ -50,27 +56,27 @@ def generate_response(message):
     )
     return response.choices[0].message.content
 
+
 def text_to_speech(text):
     """Convert text to speech using OpenAI TTS"""
     timestamp = int(time.time())
     output_filename = f"response_{timestamp}.mp3"
     output_path = os.path.join(RECORDINGS_DIR, output_filename)
-    
+
     # Generate speech from text
     response = openai.Audio.speech.create(
         model="tts-1",
         voice="alloy",
         input=text
     )
-    
+
     # Save the audio file
     with open(output_path, "wb") as f:
         f.write(response.content)
-    
+
     return output_path
 
 
-from fish_audio_sdk import Session, TTSRequest, ReferenceAudio
 def text_to_speech_fish(text):
     timestamp = int(time.time())
     output_filename = f"response_{timestamp}.mp3"
@@ -89,8 +95,7 @@ def text_to_speech_fish(text):
             f.write(chunk)
     return output_path
 
-from elevenlabs import VoiceSettings
-from elevenlabs.client import ElevenLabs
+
 def text_to_speech_11labs(text: str, speed: float = 1.0):
     print(f'start text_to_speech_11labs')
 
@@ -130,34 +135,36 @@ def text_to_speech_11labs(text: str, speed: float = 1.0):
 
     return output_path
 
+
 def process_audio(audio_path, voice_speed=1.0):
     """Main function to process audio input and generate response"""
     if audio_path is None:
         return "Please record audio first.", None, None
-    
+
     # Step 1: Transcribe the audio
     transcription, saved_recording = transcribe_audio(audio_path)
-    
+
     # Step 2: Generate response
     response_text = generate_response(transcription)
-    
+
     # Step 3: Convert response to speech
     print(f'before text_to_speech_11labs')
     response_audio = text_to_speech_11labs(response_text, speed=voice_speed)
-    
+
     # Return all results
     return transcription, response_text, response_audio
+
 
 # Create Gradio interface
 with gr.Blocks(title="Realtime Talking Agent") as demo:
     gr.Markdown("# Realtime Talking Agent")
     gr.Markdown("Speak into the microphone, and the AI will respond with audio.")
-    
+
     with gr.Row():
         with gr.Column():
             audio_input = gr.Audio(
                 label="Record your message",
-                sources=["microphone"], 
+                sources=["microphone"],
                 type="filepath"
             )
             voice_speed = gr.Slider(
@@ -169,42 +176,42 @@ with gr.Blocks(title="Realtime Talking Agent") as demo:
                 info="Control the speech rate (0.7-1.2)"
             )
             submit_btn = gr.Button("Process Audio")
-        
+
         with gr.Column():
             transcription_output = gr.Textbox(label="Your message (transcribed)")
             response_output = gr.Textbox(label="AI Response")
             audio_output = gr.Audio(label="AI Voice Response", autoplay=True)
-    
+
     # History section
     with gr.Accordion("Recording History", open=False):
         gr.Markdown("All recordings are saved in the 'recordings' directory.")
         recording_gallery = gr.Files(label="Saved Recordings", file_count="multiple")
-        
+
         def update_recordings():
-            files = [os.path.join(RECORDINGS_DIR, f) for f in os.listdir(RECORDINGS_DIR) 
-                    if f.endswith('.mp3')]
+            files = [os.path.join(RECORDINGS_DIR, f) for f in os.listdir(RECORDINGS_DIR)
+                     if f.endswith('.mp3')]
             return files
-        
+
         refresh_btn = gr.Button("Refresh Recording List")
         refresh_btn.click(fn=update_recordings, outputs=recording_gallery)
-    
+
     # Set up events
     submit_btn.click(
         fn=process_audio,
         inputs=[audio_input, voice_speed],
         outputs=[transcription_output, response_output, audio_output]
     )
-    
+
     # Also process when recording is completed
     audio_input.stop_recording(
         fn=process_audio,
         inputs=[audio_input, voice_speed],
         outputs=[transcription_output, response_output, audio_output]
     )
-    
+
     # Initialize recordings list on load
     demo.load(fn=update_recordings, outputs=recording_gallery)
 
 # Launch the app
 if __name__ == "__main__":
-    demo.launch() 
+    demo.launch()
