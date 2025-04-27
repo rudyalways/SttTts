@@ -3,3 +3,8 @@ openai==1.6.0
 python-dotenv==1.0.0
 Flask-Cors==4.0.0
 pygame==2.5.2 
+
+gradio==5.27.0
+openai-whisper==20240930
+fish-audio-sdk==2025.4.2
+elevenlabs==1.57.0
