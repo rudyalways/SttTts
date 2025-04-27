@@ -111,17 +111,23 @@ def text_to_speech_11labs(text: str, speed: float = 1.0):
     print(f"Using voice ID: {voice_id}")
 
     try:
+        # audio = elevenlabs_client.text_to_speech.convert(
+        #     voice_id=voice_id,
+        #     model_id='eleven_turbo_v2',
+        #     output_format='mp3_22050_32',
+        #     text=text,
+        #     voice_settings=VoiceSettings(
+        #         stability=0.5,
+        #         similarity_boost=0.5,
+        #         style=0.2,
+        #         speed=speed,
+        #     ),
+        # )
         audio = elevenlabs_client.text_to_speech.convert(
-            voice_id=voice_id,
-            model_id='eleven_turbo_v2',
-            output_format='mp3_22050_32',
             text=text,
-            voice_settings=VoiceSettings(
-                stability=0.5,
-                similarity_boost=0.5,
-                style=0.2,
-                speed=speed,
-            ),
+            voice_id=voice_id,
+            model_id="eleven_multilingual_v2",
+            output_format="mp3_44100_128",
         )
         with open(output_path, "wb") as f:
             if hasattr(audio, '__iter__'):
