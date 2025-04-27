@@ -104,10 +104,11 @@ def text_to_speech_11labs(text: str, speed: float = 1.0):
     # Use the globally defined voice_id variable or get it again using os.getenv
     voice_id = os.getenv("ELEVENLABS_VOICE_ID")
     print(f"Using voice ID: {voice_id}")
-
+    # eleven_turbo_v2
+    # eleven_multilingual_v2
     audio = elevenlabs_client.text_to_speech.convert(
         voice_id=voice_id,
-        model_id='eleven_turbo_v2',
+        model_id='eleven_multilingual_v2',
         # optimize_streaming_latency="0",
         output_format='mp3_22050_32',
         text=text,
