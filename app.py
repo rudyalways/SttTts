@@ -2,6 +2,7 @@ import asyncio
 import os
 import threading
 import time
+import traceback
 import urllib.parse
 from typing import Iterator
 
@@ -16,55 +17,6 @@ from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from fish_audio_sdk import ReferenceAudio, Session, TTSRequest
 from openai import OpenAI
-
-app = FastAPI()
-
-
-@app.get("/stream_audio")
-def stream_audio(text: str = Query(...), speed: float = Query(1.0)):
-    audio_stream = text_to_speech_11labs_as_stream(text, speed)
-    if not audio_stream:
-        return "Error on generating audio stream"
-    return StreamingResponse(audio_stream, media_type="audio/mpeg")
-
-
-# line_queue: asyncio.Queue[str] = asyncio.Queue()
-
-
-@app.websocket("/ws/lines")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    try:
-        while True:
-            data = await websocket.receive_text()
-            # await line_queue.put(data)
-            print(f"Received: {data}")
-    except WebSocketDisconnect:
-        print("WebSocket disconnected")
-
-
-def get_audio_player_html(text, speed):
-    text_param = urllib.parse.quote(text)
-    return f"""
-        <audio id="ai-audio" controls autoplay>
-            <source src="http://localhost:8000/stream_audio?text={text_param}&speed={speed}" type="audio/mpeg">
-            Your browser does not support the audio element.
-        </audio>
-        <script>
-            document.addEventListener('DOMContentLoaded', () => {{
-                window.setTimeout(function() {{
-                    var audioElement = document.getElementById('ai-audio');
-                    if (audioElement) {{
-                        console.log("tttt");
-                        audioElement.play().catch(function(error) {{
-                            console.log("Audio playback failed:", error);
-                        }});
-                    }}
-                }}, 1000);
-            }});
-        </script>
-    """
-
 
 # Load environment variables
 load_dotenv(override=True)
@@ -81,6 +33,178 @@ whisper_model = whisper.load_model("base")
 
 # Initialize OpenAI client
 # client = openai.OpenAI(api_key=oai_key)
+elevenlabs_client = ElevenLabs(api_key=os.getenv('ELEVENLABS_API_KEY'))
+
+voice_id = os.getenv("ELEVENLABS_VOICE_ID")
+print(f"Using voice ID: {voice_id}")
+
+app = FastAPI()
+
+
+audio_websocket: WebSocket = None
+message_lines: Iterator[str] = []
+
+
+def get_message_line() -> str:
+    global message_lines
+    while True:
+        if len(message_lines) == 0:  # Block when there are no elements
+            time.sleep(0.1)  # Small delay to prevent CPU overuse
+            continue
+
+        # Get and remove first element
+        message = message_lines[0]
+        message_lines = message_lines[1:]
+
+        # Return the first element
+        return message
+
+
+@app.websocket("/ws/lines")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    print("Websocket for receiving message is connected!")
+    start_time = time.time()  # Start timing
+    stream = elevenlabs_client.text_to_speech.convert_realtime(
+        text=get_message_line(),
+        voice_id=voice_id,
+        model_id="eleven_multilingual_v2",
+        output_format="mp3_44100_128",
+    )
+    end_time = time.time()  # End timing
+    print(f"ElevenLabs convert_as_stream execution time: {(end_time - start_time) * 1000:.0f} ms")
+    try:
+        while True:
+            data = await websocket.receive_text()
+            # await line_queue.put(data)
+            print(f"Received: {data}")
+            global message_lines
+            message_lines = list(message_lines) + [data]
+
+            for audio_data in stream:
+                print(f"Sending audio chunk of size: {len(audio_data)} bytes")
+                if audio_websocket:
+                    await audio_websocket.send_bytes(audio_data)
+
+    except Exception as e:
+        print(f"2 TTS generation failed: {e}")
+        print("Error stack trace:")
+        print(traceback.format_exc())
+        return None  # Or return a path to a default error audio file
+    except WebSocketDisconnect:
+        print("WebSocket disconnected")
+
+
+@app.websocket("/ws/audio")
+async def audio_websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    print("Websocket for sending audio data is connected!")
+    try:
+        global audio_websocket
+        if audio_websocket is not None:
+            try:
+                audio_websocket.close()
+            except Exception as e:
+                print(f"Error on closing websocket: {e}")
+        audio_websocket = websocket
+
+        # # Get the text parameter from the initial message
+        # data = await websocket.receive_json()
+        # text = data.get("text", "")
+        # speed = data.get("speed", 1.0)
+
+        # # Generate the audio stream
+        # audio_stream = text_to_speech_11labs_as_stream(text, speed)
+        # if not audio_stream:
+        #     await websocket.send_text("Error generating audio stream")
+        #     return
+
+        # # Stream the audio chunks to the client
+        # for chunk in audio_stream:
+        #     await websocket.send_bytes(chunk)
+
+    except WebSocketDisconnect:
+        print("Audio WebSocket disconnected")
+    except Exception as e:
+        print(f"Error in audio websocket: {e}")
+
+
+def get_audio_player_html():
+    return f"""
+        <div id="audio-container">
+            <audio id="ai-audio" controls autoplay></audio>
+        </div>
+        
+        <script>
+            document.addEventListener('DOMContentLoaded', () => {{
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const audioElement = document.getElementById('ai-audio');
+                
+                // Create MediaSource object
+                const mediaSource = new MediaSource();
+                audioElement.src = URL.createObjectURL(mediaSource);
+                
+                let sourceBuffer;
+                const queue = [];
+                let updating = false;
+                
+                function processQueue() {{
+                    if (queue.length > 0 && !updating) {{
+                        updating = true;
+                        sourceBuffer.appendBuffer(queue.shift());
+                    }}
+                }}
+                
+                mediaSource.addEventListener('sourceopen', () => {{
+                    sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+                    
+                    sourceBuffer.addEventListener('updateend', () => {{
+                        updating = false;
+                        processQueue();
+                    }});
+                    
+                    // Connect to WebSocket
+                    const ws = new WebSocket('ws://localhost:8100/ws/audio');
+                    
+                    ws.onopen = () => {{
+                        console.log('WebSocket connected');
+                    }};
+                    
+                    ws.onmessage = (event) => {{
+                        if (event.data instanceof Blob) {{
+                            const reader = new FileReader();
+                            reader.onload = () => {{
+                                const arrayBuffer = reader.result;
+                                if (sourceBuffer.updating) {{
+                                    queue.push(arrayBuffer);
+                                }} else {{
+                                    updating = true;
+                                    sourceBuffer.appendBuffer(arrayBuffer);
+                                }}
+                            }};
+                            reader.readAsArrayBuffer(event.data);
+                        }}
+                    }};
+                    
+                    ws.onerror = (error) => {{
+                        console.error('WebSocket error:', error);
+                    }};
+                    
+                    ws.onclose = () => {{
+                        console.log('WebSocket connection closed');
+                        mediaSource.endOfStream();
+                    }};
+                }});
+                
+                // Attempt to play once loaded
+                audioElement.addEventListener('canplay', () => {{
+                    audioElement.play().catch(error => {{
+                        console.error('Playback failed:', error);
+                    }});
+                }});
+            }});
+        </script>
+    """
 
 
 def transcribe_audio(audio_path):
@@ -193,13 +317,6 @@ def text_to_speech_11labs(text: str, speed: float = 1.0):
     output_filename = f"response_{timestamp}.mp3"
     output_path = os.path.join(RECORDINGS_DIR, output_filename)
 
-    elevenlabs_client = ElevenLabs(
-        api_key=os.getenv('ELEVENLABS_API_KEY'),
-    )
-
-    voice_id = os.getenv("ELEVENLABS_VOICE_ID")
-    print(f"Using voice ID: {voice_id}")
-
     try:
         # audio = elevenlabs_client.text_to_speech.convert(
         #     voice_id=voice_id,
@@ -232,7 +349,9 @@ def text_to_speech_11labs(text: str, speed: float = 1.0):
                     raise ValueError("No audio data received from ElevenLabs.")
                 f.write(audio)
     except Exception as e:
-        print(f"TTS generation failed: {e}")
+        print(f"3 TTS generation failed: {e}")
+        print("Error stack trace:")
+        print(traceback.format_exc())
         return None  # Or return a path to a default error audio file
 
     # Check file size
@@ -244,13 +363,6 @@ def text_to_speech_11labs(text: str, speed: float = 1.0):
 
 
 def text_to_speech_11labs_as_stream(text: str, speed: float = 1.0) -> Iterator[bytes]:
-    elevenlabs_client = ElevenLabs(
-        api_key=os.getenv('ELEVENLABS_API_KEY'),
-    )
-
-    voice_id = os.getenv("ELEVENLABS_VOICE_ID")
-    print(f"Using voice ID: {voice_id}")
-
     try:
         start_time = time.time()  # Start timing
         result = elevenlabs_client.text_to_speech.convert_realtime(
@@ -263,7 +375,9 @@ def text_to_speech_11labs_as_stream(text: str, speed: float = 1.0) -> Iterator[b
         print(f"ElevenLabs convert_as_stream execution time: {(end_time - start_time) * 1000:.0f} ms")
         return result
     except Exception as e:
-        print(f"TTS generation failed: {e}")
+        print(f"1 TTS generation failed: {e}")
+        print("Error stack trace:")
+        print(traceback.format_exc())
         return None  # Or return a path to a default error audio file
 
 
@@ -276,16 +390,9 @@ def process_audio(audio_path, voice_speed=1.0):
     transcription, saved_recording = transcribe_audio(audio_path)
 
     # Step 2: Generate response
-    response_text = generate_response(transcription)
+    generate_response(transcription)
 
-    # # Step 3: Convert response to speech
-    # print(f'before text_to_speech_11labs')
-    # response_audio = text_to_speech_11labs_as_stream(response_text, speed=voice_speed)
-    # if not response_audio:
-    #     return transcription, response_text, None  # Or a default error message/audio
-
-    # Return all results
-    return transcription, response_text, get_audio_player_html(response_text, voice_speed)
+    return transcription
 
 
 # Create Gradio interface
@@ -315,6 +422,8 @@ with gr.Blocks(title="Realtime Talking Agent") as demo:
             response_output = gr.Textbox(label="AI Response")
             # audio_output = gr.Audio(label="AI Voice Response", autoplay=True)
             audio_html = gr.HTML()
+            # Initialize audio_html with the audio player HTML
+            audio_html.value = get_audio_player_html()
 
     # History section
     with gr.Accordion("Recording History", open=False):
@@ -332,14 +441,14 @@ with gr.Blocks(title="Realtime Talking Agent") as demo:
     submit_btn.click(
         fn=process_audio,
         inputs=[audio_input, voice_speed],
-        outputs=[transcription_output, response_output, audio_html]
+        outputs=[transcription_output]
     )
 
     # Also process when recording is completed
     audio_input.stop_recording(
         fn=process_audio,
         inputs=[audio_input, voice_speed],
-        outputs=[transcription_output, response_output, audio_html]
+        outputs=[transcription_output]
     )
 
     # Initialize recordings list on load
@@ -349,10 +458,16 @@ with gr.Blocks(title="Realtime Talking Agent") as demo:
 if __name__ == "__main__":
     # demo.launch()
 
+    def run_server():
+        uvicorn.run(app, host="0.0.0.0", port=8100)
+
     def run_gradio():
         demo.launch(server_name="0.0.0.0", server_port=7860, share=False)
 
-    gradio_thread = threading.Thread(target=run_gradio)
-    gradio_thread.start()
+    server_thread = threading.Thread(target=run_server)
+    server_thread.start()
 
-    uvicorn.run(app, host="0.0.0.0", port=8100)
+    run_gradio()
+
+    # gradio_thread = threading.Thread(target=run_gradio)
+    # gradio_thread.start()
