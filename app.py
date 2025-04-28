@@ -229,14 +229,16 @@ def text_to_speech_11labs(text: str, speed: float = 1.0):
 def text_to_speech_11labs_as_stream() -> Iterator[bytes]:
     try:
         start_time = time.time()  # Start timing
-        stream = elevenlabs_client.text_to_speech.convert_realtime(
+        result = elevenlabs_client.text_to_speech.convert_realtime(
             text=get_text(),
             voice_id=voice_id,
             model_id="eleven_multilingual_v2"
         )
         end_time = time.time()  # End timing
         print(f"ElevenLabs convert_as_stream execution time: {(end_time - start_time) * 1000:.0f} ms")
-        return stream
+        for chunk in result:
+            if chunk is not None:
+                yield chunk
 
     except Exception as e:
         print(f"TTS generation failed: {e}")
@@ -253,9 +255,6 @@ def text_to_speech_11labs_streaming():
     output_path = os.path.join(RECORDINGS_DIR, output_filename)
 
     try:
-        while len(message_texts) == 0:
-            time.sleep(1)
-
         start_time = time.time()
         result = elevenlabs_client.text_to_speech.convert_realtime(
             text=get_text(),
