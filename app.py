@@ -1,3 +1,4 @@
+import asyncio
 import os
 import threading
 import time
@@ -5,15 +6,16 @@ import urllib.parse
 from typing import Iterator
 
 import gradio as gr
-import openai
 import uvicorn
+import websockets
 import whisper
 from dotenv import load_dotenv
 from elevenlabs import VoiceSettings
 from elevenlabs.client import ElevenLabs
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from fish_audio_sdk import ReferenceAudio, Session, TTSRequest
+from openai import OpenAI
 
 app = FastAPI()
 
@@ -24,6 +26,21 @@ def stream_audio(text: str = Query(...), speed: float = Query(1.0)):
     if not audio_stream:
         return "Error on generating audio stream"
     return StreamingResponse(audio_stream, media_type="audio/mpeg")
+
+
+# line_queue: asyncio.Queue[str] = asyncio.Queue()
+
+
+@app.websocket("/ws/lines")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            # await line_queue.put(data)
+            print(f"Received: {data}")
+    except WebSocketDisconnect:
+        print("WebSocket disconnected")
 
 
 def get_audio_player_html(text, speed):
@@ -51,7 +68,8 @@ def get_audio_player_html(text, speed):
 
 # Load environment variables
 load_dotenv(override=True)
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# openai.api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI()
 
 # Create recordings directory if it doesn't exist
 RECORDINGS_DIR = os.path.join(os.getcwd(), 'recordings')
@@ -86,14 +104,47 @@ def transcribe_audio(audio_path):
 
 def generate_response(message):
     """Generate response using OpenAI GPT"""
-    response = openai.chat.completions.create(
+    stream = client.responses.create(
         model="gpt-4o",
-        messages=[
+        input=[
             {"role": "system", "content": "You are a helpful assistant. Please respond in Simplified Chinese (简体中文)."},
             {"role": "user", "content": message}
-        ]
+        ],
+        stream=True
     )
-    return response.choices[0].message.content
+    from openai.types.responses.response_text_delta_event import \
+        ResponseTextDeltaEvent
+
+    # Buffer to store characters
+    buffer = ""
+
+    # def send_to_websockets(sentence: str):
+    #     asyncio.run_coroutine_threadsafe(
+    #         line_queue.put(buffer),
+    #         asyncio.get_event_loop()
+    #     )
+
+    uri = "ws://localhost:8100/ws/lines"
+    with websockets.sync.client.connect(uri) as websocket:
+        for event in stream:
+            if isinstance(event, ResponseTextDeltaEvent):
+                # Add the new character to the buffer
+                buffer += event.delta.rstrip('\n')
+
+                # Check if the buffer ends with a sentence-ending punctuation
+                if any(buffer.endswith(p) for p in ["。", "！", "？", "…", "。", "！", "？", "…"]):
+                    # Print the complete sentence and clear the buffer
+                    # print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {buffer}")
+
+                    # Send the completed sentence to the websocket queue
+                    websocket.send(buffer)
+                    buffer = ""
+
+        # Print any remaining text in the buffer
+        if buffer:
+            # print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {buffer}")
+            websocket.send(buffer)
+            buffer = ""
 
 
 def text_to_speech(text):
@@ -103,7 +154,7 @@ def text_to_speech(text):
     output_path = os.path.join(RECORDINGS_DIR, output_filename)
 
     # Generate speech from text
-    response = openai.Audio.speech.create(
+    response = client.Audio.speech.create(
         model="tts-1",
         voice="alloy",
         input=text
@@ -202,7 +253,7 @@ def text_to_speech_11labs_as_stream(text: str, speed: float = 1.0) -> Iterator[b
 
     try:
         start_time = time.time()  # Start timing
-        result = elevenlabs_client.text_to_speech.convert_as_stream(
+        result = elevenlabs_client.text_to_speech.convert_realtime(
             text=text,
             voice_id=voice_id,
             model_id="eleven_multilingual_v2",
@@ -304,4 +355,4 @@ if __name__ == "__main__":
     gradio_thread = threading.Thread(target=run_gradio)
     gradio_thread.start()
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8100)
