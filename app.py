@@ -236,18 +236,18 @@ def text_to_speech_11labs_as_stream() -> Iterator[bytes]:
         )
         end_time = time.time()  # End timing
         print(f"ElevenLabs convert_as_stream execution time: {(end_time - start_time) * 1000:.0f} ms")
-        for chunk in result:
-            if chunk is not None:
-                yield chunk
+
+        # Yield each chunk instead of returning the result directly
+        return result
 
     except Exception as e:
         print(f"TTS generation failed: {e}")
         print("Error stack trace:")
         print(traceback.format_exc())
-        return None  # Or return a path to a default error audio file
+        return None
 
 
-def text_to_speech_11labs_streaming():
+def text_to_speech_11labs_streaming_to_file():
     global message_texts
     """Convert text to speech using ElevenLabs and save to file"""
     timestamp = int(time.time())
@@ -292,7 +292,7 @@ def process_audio(audio_path, voice_speed=1.0):
     # Step 2: Generate response in a background thread instead of using asyncio
     threading.Thread(target=lambda: asyncio.run(generate_response(transcription)), daemon=True).start()
 
-    return transcription, "", text_to_speech_11labs_streaming()
+    return transcription, "", text_to_speech_11labs_streaming_to_file()
 
 
 # Create Gradio interface
